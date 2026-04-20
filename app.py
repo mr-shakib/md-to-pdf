@@ -420,21 +420,21 @@ HTML_PAGE = """<!DOCTYPE html>
     <div class="field theme-picker">
       <label>Theme</label>
       <div class="themes" id="themePicker">
-        <div class="theme-card active" data-theme="default">
-          <div class="swatch" style="background:linear-gradient(135deg,#0f3460,#e94560)"></div>
-          <span>Default</span>
+        <div class="theme-card active" data-theme="classic">
+          <div class="swatch" style="background:linear-gradient(135deg,#ffffff,#1a56db);border:1px solid #ccc"></div>
+          <span>Classic</span>
+        </div>
+        <div class="theme-card" data-theme="academic">
+          <div class="swatch" style="background:linear-gradient(135deg,#ffffff,#333333);border:1px solid #ccc"></div>
+          <span>Academic</span>
+        </div>
+        <div class="theme-card" data-theme="modern">
+          <div class="swatch" style="background:linear-gradient(135deg,#ffffff,#0969da);border:1px solid #ccc"></div>
+          <span>Modern</span>
         </div>
         <div class="theme-card" data-theme="dark">
           <div class="swatch" style="background:linear-gradient(135deg,#0d1117,#58a6ff)"></div>
           <span>Dark</span>
-        </div>
-        <div class="theme-card" data-theme="minimal">
-          <div class="swatch" style="background:linear-gradient(135deg,#fafafa,#333)"></div>
-          <span>Minimal</span>
-        </div>
-        <div class="theme-card" data-theme="technical">
-          <div class="swatch" style="background:linear-gradient(135deg,#1a365d,#2b6cb0)"></div>
-          <span>Technical</span>
         </div>
       </div>
     </div>
@@ -637,7 +637,7 @@ def convert_endpoint():
     if not filename.lower().endswith((".md", ".markdown", ".txt")):
         return jsonify({"error": "Only .md / .markdown files are supported."}), 400
 
-    theme = request.form.get("theme", "default")
+    theme = request.form.get("theme", "classic")
     toc = request.form.get("toc", "1") == "1"
     try:
         font_size = int(request.form.get("font_size", 11))
