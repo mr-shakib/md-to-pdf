@@ -179,20 +179,22 @@ def preview():
 
 @app.route("/convert", methods=["POST"])
 def convert_endpoint():
-    """Convert markdown text or uploaded file → PDF, return download token."""
-    # Support both JSON body (from editor) and multipart (from file upload)
+    """Convert markdown -> PDF and return the PDF as a base64 JSON response."""
+    from io import BytesIO
+    import base64
+
     if request.is_json:
         data      = request.get_json()
         md_text   = data.get("content", "")
         theme     = data.get("theme", "default")
         toc       = bool(data.get("toc", True))
         font_size = int(data.get("font_size", 11))
-        filename  = data.get("filename", "document") + ".md"
+        out_name  = (data.get("filename") or "document") + ".pdf"
     else:
         f = request.files.get("file")
         if not f:
             return jsonify({"error": "No content provided."}), 400
-        filename  = f.filename or "document.md"
+        out_name  = Path(f.filename or "document.md").stem + ".pdf"
         md_text   = f.read().decode("utf-8", errors="replace")
         theme     = request.form.get("theme", "default")
         toc       = request.form.get("toc", "1") == "1"
@@ -205,11 +207,12 @@ def convert_endpoint():
         theme = "default"
     font_size = max(8, min(16, font_size))
 
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".md", mode="w", encoding="utf-8") as tmp_in:
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".md",
+                                     mode="w", encoding="utf-8") as tmp_in:
         tmp_in.write(md_text)
         tmp_in_path = tmp_in.name
 
-    tmp_out = tmp_in_path.replace(".md", ".pdf")
+    tmp_out = tmp_in_path[:-3] + ".pdf"
 
     try:
         convert(
@@ -219,50 +222,22 @@ def convert_endpoint():
             toc=toc,
             font_size=font_size,
         )
+        pdf_bytes = Path(tmp_out).read_bytes()
     except Exception as e:
         return jsonify({"error": f"Conversion failed: {str(e)}"}), 500
     finally:
-        try: os.unlink(tmp_in_path)
-        except: pass
+        for p in (tmp_in_path, tmp_out):
+            try: os.unlink(p)
+            except: pass
 
-    pdf_bytes = Path(tmp_out).read_bytes()
-    try: os.unlink(tmp_out)
-    except: pass
-
-    token = uuid.uuid4().hex
-    out_filename = Path(filename).stem + ".pdf"
-    FILE_STORE[token] = {"bytes": pdf_bytes, "filename": out_filename}
-
+    # Return PDF as base64 so the browser JS can trigger the download
+    # directly via Blob URL — no second HTTP request needed.
     return jsonify({
-        "token":    token,
-        "filename": out_filename,
+        "filename": out_name,
         "size_kb":  round(len(pdf_bytes) / 1024, 1),
         "pages":    max(1, len(pdf_bytes) // 3000),
+        "data":     base64.b64encode(pdf_bytes).decode("ascii"),
     })
-
-
-@app.route("/download/<token>")
-def download(token):
-    entry = FILE_STORE.get(token)          # peek — don't pop yet
-    if not entry:
-        return "File not found or already downloaded.", 404
-
-    from io import BytesIO
-    from flask import after_this_request
-
-    @after_this_request
-    def remove_token(response):            # clean up only after response sent
-        FILE_STORE.pop(token, None)
-        return response
-
-    buf = BytesIO(entry["bytes"])
-    buf.seek(0)
-    return send_file(
-        buf,
-        as_attachment=True,
-        download_name=entry["filename"],
-        mimetype="application/pdf",
-    )
 
 
 # ── Main HTML page ─────────────────────────────────────────────────────────────
@@ -761,13 +736,19 @@ function resizeFrame() {
 window.addEventListener('resize', resizeFrame);
 
 // ── Generate PDF ──────────────────────────────────────────────────────────────
+let lastBlobUrl = null;
+let lastFilename = 'document.pdf';
+
 btnConvert.addEventListener('click', async () => {
   const content = editor.value.trim();
   if (!content) { showToast('Nothing to convert — editor is empty.', 'error'); return; }
 
   btnConvert.disabled = true;
   btnDownload.disabled = true;
-  lastToken = null;
+
+  // Revoke any previous blob URL to free memory
+  if (lastBlobUrl) { URL.revokeObjectURL(lastBlobUrl); lastBlobUrl = null; }
+
   setStatus('updating', 'generating…');
 
   try {
@@ -782,10 +763,23 @@ btnConvert.addEventListener('click', async () => {
         filename:  currentFile,
       })
     });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || `Server error ${res.status}`);
+    }
+
     const data = await res.json();
     if (data.error) throw new Error(data.error);
 
-    lastToken = data.token;
+    // Decode base64 PDF and create a Blob URL
+    const binary = atob(data.data);
+    const bytes  = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    const blob = new Blob([bytes], { type: 'application/pdf' });
+    lastBlobUrl  = URL.createObjectURL(blob);
+    lastFilename = data.filename;
+
     btnDownload.disabled = false;
     setStatus('ok', `${data.pages}p · ${data.size_kb}KB`);
     showToast(`✅ PDF ready — ${data.pages} pages, ${data.size_kb} KB`, 'success');
@@ -799,14 +793,15 @@ btnConvert.addEventListener('click', async () => {
 
 // ── Download ──────────────────────────────────────────────────────────────────
 btnDownload.addEventListener('click', () => {
-  if (!lastToken) return;
+  if (!lastBlobUrl) return;
   const a = document.createElement('a');
-  a.href = '/download/' + lastToken;
-  a.download = currentFile + '.pdf';
+  a.href     = lastBlobUrl;
+  a.download = lastFilename;
+  document.body.appendChild(a);   // must be in DOM for Firefox
   a.click();
-  btnDownload.disabled = true;
-  lastToken = null;
-  setStatus('ready', 'downloaded');
+  document.body.removeChild(a);
+  setStatus('ok', 'downloaded ✓');
+  showToast('📥 Download started!', 'success');
 });
 
 // ── Status pill ───────────────────────────────────────────────────────────────
