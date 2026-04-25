@@ -243,15 +243,26 @@ def convert_endpoint():
 
 @app.route("/download/<token>")
 def download(token):
-    entry = FILE_STORE.pop(token, None)
+    entry = FILE_STORE.get(token)          # peek — don't pop yet
     if not entry:
         return "File not found or already downloaded.", 404
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
-        tmp.write(entry["bytes"])
-        tmp_path = tmp.name
-    return send_file(tmp_path, as_attachment=True,
-                     download_name=entry["filename"],
-                     mimetype="application/pdf")
+
+    from io import BytesIO
+    from flask import after_this_request
+
+    @after_this_request
+    def remove_token(response):            # clean up only after response sent
+        FILE_STORE.pop(token, None)
+        return response
+
+    buf = BytesIO(entry["bytes"])
+    buf.seek(0)
+    return send_file(
+        buf,
+        as_attachment=True,
+        download_name=entry["filename"],
+        mimetype="application/pdf",
+    )
 
 
 # ── Main HTML page ─────────────────────────────────────────────────────────────
